@@ -4,7 +4,14 @@ import os
 import torch
 from torch import nn
 from torch.nn import functional as F
-import torchgeometry as tgm
+try:
+    import torchgeometry as tgm  # legacy name for kornia
+except ImportError:  # fallback handled below
+    tgm = None
+    try:
+        import kornia.filters as KF  # modern replacement
+    except ImportError:
+        KF = None
 
 from datasets import VITONDataset, VITONDataLoader
 from networks import SegGenerator, GMM, ALIASGenerator
@@ -52,10 +59,21 @@ def get_opt():
     return opt
 
 
-def test(opt, seg, gmm, alias):
+def test(opt, seg, gmm, alias, device):
     up = nn.Upsample(size=(opt.load_height, opt.load_width), mode='bilinear')
-    gauss = tgm.image.GaussianBlur((15, 15), (3, 3))
-    gauss.cuda()
+    # Build Gaussian blur with available backend
+    if tgm is not None:
+        gauss = tgm.image.GaussianBlur((15, 15), (3, 3)).to(device)
+    elif KF is not None:
+        gauss = KF.GaussianBlur2d((15, 15), (3.0, 3.0)).to(device)
+    else:
+        # Minimal fallback using average pooling approximation
+        class _AvgBlur(nn.Module):
+            def __init__(self):
+                super().__init__()
+            def forward(self, x):
+                return F.avg_pool2d(x, kernel_size=15, stride=1, padding=7)
+        gauss = _AvgBlur()
 
     test_dataset = VITONDataset(opt)
     test_loader = VITONDataLoader(opt, test_dataset)
@@ -65,24 +83,24 @@ def test(opt, seg, gmm, alias):
             img_names = inputs['img_name']
             c_names = inputs['c_name']['unpaired']
 
-            img_agnostic = inputs['img_agnostic'].cuda()
-            parse_agnostic = inputs['parse_agnostic'].cuda()
-            pose = inputs['pose'].cuda()
-            c = inputs['cloth']['unpaired'].cuda()
-            cm = inputs['cloth_mask']['unpaired'].cuda()
+            img_agnostic = inputs['img_agnostic'].to(device)
+            parse_agnostic = inputs['parse_agnostic'].to(device)
+            pose = inputs['pose'].to(device)
+            c = inputs['cloth']['unpaired'].to(device)
+            cm = inputs['cloth_mask']['unpaired'].to(device)
 
             # Part 1. Segmentation generation
             parse_agnostic_down = F.interpolate(parse_agnostic, size=(256, 192), mode='bilinear')
             pose_down = F.interpolate(pose, size=(256, 192), mode='bilinear')
             c_masked_down = F.interpolate(c * cm, size=(256, 192), mode='bilinear')
             cm_down = F.interpolate(cm, size=(256, 192), mode='bilinear')
-            seg_input = torch.cat((cm_down, c_masked_down, parse_agnostic_down, pose_down, gen_noise(cm_down.size()).cuda()), dim=1)
+            seg_input = torch.cat((cm_down, c_masked_down, parse_agnostic_down, pose_down, gen_noise(cm_down.size()).to(device)), dim=1)
 
             parse_pred_down = seg(seg_input)
             parse_pred = gauss(up(parse_pred_down))
             parse_pred = parse_pred.argmax(dim=1)[:, None]
 
-            parse_old = torch.zeros(parse_pred.size(0), 13, opt.load_height, opt.load_width, dtype=torch.float).cuda()
+            parse_old = torch.zeros(parse_pred.size(0), 13, opt.load_height, opt.load_width, dtype=torch.float).to(device)
             parse_old.scatter_(1, parse_pred, 1.0)
 
             labels = {
@@ -94,7 +112,7 @@ def test(opt, seg, gmm, alias):
                 5:  ['right_arm',   [6]],
                 6:  ['noise',       [12]]
             }
-            parse = torch.zeros(parse_pred.size(0), 7, opt.load_height, opt.load_width, dtype=torch.float).cuda()
+            parse = torch.zeros(parse_pred.size(0), 7, opt.load_height, opt.load_width, dtype=torch.float).to(device)
             for j in range(len(labels)):
                 for label in labels[j][1]:
                     parse[:, j] += parse_old[:, label]
@@ -135,6 +153,8 @@ def main():
     if not os.path.exists(os.path.join(opt.save_dir, opt.name)):
         os.makedirs(os.path.join(opt.save_dir, opt.name))
 
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
     seg = SegGenerator(opt, input_nc=opt.semantic_nc + 8, output_nc=opt.semantic_nc)
     gmm = GMM(opt, inputA_nc=7, inputB_nc=3)
     opt.semantic_nc = 7
@@ -145,10 +165,10 @@ def main():
     load_checkpoint(gmm, os.path.join(opt.checkpoint_dir, opt.gmm_checkpoint))
     load_checkpoint(alias, os.path.join(opt.checkpoint_dir, opt.alias_checkpoint))
 
-    seg.cuda().eval()
-    gmm.cuda().eval()
-    alias.cuda().eval()
-    test(opt, seg, gmm, alias)
+    seg.to(device).eval()
+    gmm.to(device).eval()
+    alias.to(device).eval()
+    test(opt, seg, gmm, alias, device)
 
 
 if __name__ == '__main__':

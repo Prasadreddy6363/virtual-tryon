@@ -1,0 +1,97 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VITON-HD Web</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; }
+    button { font-size: 16px; padding: 8px 14px; }
+    .columns { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; align-items: start; }
+    .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; max-height: 60vh; overflow: auto; border: 1px solid #ddd; padding: 12px; }
+    .thumb { border: 2px solid transparent; border-radius: 6px; cursor: pointer; }
+    .thumb.selected { border-color: #0078d4; }
+    .thumb img { width: 100%; height: auto; display: block; border-radius: 4px; }
+    .sticky { position: sticky; top: 0; background: #fff; padding-bottom: 8px; }
+    .notice { background: #fff5cc; border: 1px solid #ffe58f; padding: 10px 12px; border-radius: 6px; margin-bottom: 12px; }
+    .flash { background: #eef6ff; border: 1px solid #91caff; padding: 10px 12px; border-radius: 6px; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+  <h1>VITON-HD Web Demo</h1>
+
+  {% with messages = get_flashed_messages() %}
+    {% if messages %}
+      {% for m in messages %}
+        <div class="flash">{{ m }}</div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <div class="notice">
+    To add your own person image, upload a JPG named like the dataset (e.g., 00000_00.jpg). The preprocessing files must also exist: image-parse/00000_00.png, openpose-img/00000_00_rendered.png, openpose-json/00000_00_keypoints.json.
+  </div>
+
+  <form method="post" action="{{ url_for('upload_person') }}" enctype="multipart/form-data" style="margin-bottom:16px">
+    <input type="file" name="person_file" accept="image/jpeg" />
+    <button type="submit">Upload Person</button>
+  </form>
+
+  <form id="tryon-form" method="post" action="{{ url_for('tryon') }}">
+    <input type="hidden" name="person" id="person-input" />
+    <input type="hidden" name="cloth" id="cloth-input" />
+    <div class="columns">
+      <div>
+        <div class="sticky"><h3>Select Person</h3></div>
+        <div class="gallery" id="people">
+          {% for p in people %}
+          <div class="thumb" data-type="person" data-file="{{ p }}" title="{{ p }}">
+            <img src="{{ url_for('preview_person', filename=p) }}" alt="{{ p }}" loading="lazy" />
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      <div>
+        <div class="sticky"><h3>Select Cloth</h3></div>
+        <div class="gallery" id="clothes">
+          {% for c in clothes %}
+          <div class="thumb" data-type="cloth" data-file="{{ c }}" title="{{ c }}">
+            <img src="{{ url_for('preview_cloth', filename=c) }}" alt="{{ c }}" loading="lazy" />
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    <p style="margin-top:16px"><button id="generate-btn" type="submit" disabled>Generate</button></p>
+  </form>
+
+  <script>
+    const personInput = document.getElementById('person-input');
+    const clothInput = document.getElementById('cloth-input');
+    const generateBtn = document.getElementById('generate-btn');
+
+    function updateButton() {
+      generateBtn.disabled = !(personInput.value && clothInput.value);
+    }
+
+    function selectThumb(el) {
+      const type = el.dataset.type;
+      const file = el.dataset.file;
+      if (type === 'person') {
+        document.querySelectorAll('#people .thumb').forEach(t => t.classList.remove('selected'));
+        el.classList.add('selected');
+        personInput.value = file;
+      } else if (type === 'cloth') {
+        document.querySelectorAll('#clothes .thumb').forEach(t => t.classList.remove('selected'));
+        el.classList.add('selected');
+        clothInput.value = file;
+      }
+      updateButton();
+    }
+
+    document.querySelectorAll('.thumb').forEach(el => {
+      el.addEventListener('click', () => selectThumb(el));
+    });
+  </script>
+</body>
+</html>
